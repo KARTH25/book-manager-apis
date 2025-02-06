@@ -1,0 +1,20 @@
+{
+  "name": "usermgmt-node",
+  "version": "1.0.0",
+  "description": "",
+  "main": "app1.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "start": "nodemon app1.js"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "express": "^4.19.2",
+    "mongodb": "^5.9.2"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}
