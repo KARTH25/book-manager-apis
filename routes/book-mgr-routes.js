@@ -7,5 +7,5 @@ routes.get('/list', bookController.getBooksList);
 routes.post('/add', bookController.addNewBook);
 routes.get('/info', bookController.getBookInfoById);
 routes.put('/update', bookController.updateBookById);
-routes.get('/delete', bookController.deleteBookById);
+routes.delete('/delete', bookController.deleteBookById);
 module.exports = routes;

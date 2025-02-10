@@ -1,77 +1,71 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const MongoClient = require('mongodb').MongoClient;
-
-const connection_string = "mongodb://localhost:27017/";
-
-let bookDb = {};
+const log = require('../utils/logger').logger;
 
 // Controller to get list of books 
 const getBooksList = async(req, res, next) => {
-    const client = new MongoClient(connection_string);
+    
+    const transactionId = getId();
+
+    log(transactionId, "info", "Request recieved to get all books");
+
+    // Initializing client and db
+    const { client, db } = await initializeClient(transactionId, 'book-db');
+
+    // Fetching books collection
     try{
-        await client.connect();
-        const db = client.db('book-db');
-        const collection = db.collection('books').find();
-        const data = await collection.toArray();
-        res.send(data);
+        log(transactionId, "info", "Getting books list");
+        const collection = await db.collection('books').find().toArray();
+        response(res, transactionId, 200, "success", collection);
     }
     catch (err) {
-        res.send({ "status" : "failure", "description" : err });
+        log(transactionId, "error", "error in retriving books");
+        response(res, transactionId, 400, "failed", err);
     }
     finally {
-        client.close();
+       log(transactionId, "info", "closing connection");
+       setTimeout(() => { client.close() }, 1000);
     }
 }
 
 // Controller to add new book
 const addNewBook = async(req, res, next) => {
+    const transactionId = getId();
     // Getting request body
     let requestBody = {...getRequestBody(req)}; 
-    const client = new MongoClient(connection_string);
-    /*
-    // Check if already book name exists
-    let checkIfBookExists = Object.values(bookDb).filter(book => book.name.toLowerCase() == requestBody.name.toLowerCase());
-    // If Book exists returning 404 with error message
-    if(checkIfBookExists.length > 0){
-        res.status(400);
-        res.json({ status : "Failed", description : "Book Already exists" });
-    }
-    // If book not exists generating new Id and adding to request
-    let uuid = getId();
 
-    requestBody['id'] = uuid;
-    // Adding to bookdb
-    bookDb[uuid] = requestBody;
-    // returning response with newly generated book id
-    res.json({ status : "Success", description : `Book Added Successfully with id : ${uuid} !` });
-    */
+    log(transactionId, "info", `request recieved to add new book with request body ${JSON.stringify(requestBody)}`);
 
+    // Initializing client
+    const { client, db } = await initializeClient(transactionId, 'book-db')
+    
     try{
-        await client.connect();
-        
-        const db = client.db('book-db');
+        log(transactionId, "info", "checking if book already exists");
+        // Checking if book already exists in collection
+        const collection = await db.collection('books').find({ name : requestBody.name }).toArray();
 
-        const collection = db.collection('books').find({ name : requestBody.name });
-
-        const checkIfBookExists = await collection.toArray();
-
-        if(checkIfBookExists.length > 0){
-            res.status(400);
-            res.send({ "status" : "failed", "description" : "Book Already Exists" });
+        // If book exists in collection sending error response
+        if(collection.length > 0){
+            log(transactionId, "info", "book already exists");
+            response(res, transactionId, 400, "failed", "Book already exists");
+            return;
         }
 
+        // If book not exists in collection generating uuid
         const uuid = getId();
-
+        // Adding uuid to request body
         requestBody['id'] = uuid;
-
+        // 
         db.collection('books').insertOne(requestBody).then(result => {
-            res.send({ "status" : "success", "description" : `book created successfully with id : ${uuid}` });
+            log(transactionId, "info", `book added successfully with id : ${uuid}`);
+            response(res, transactionId, 200, "success", "book created successfully");
             client.close();
         });
     }
     catch (error) {
-        res.send({ "status" : "failed", "description" : error });
+        log(transactionId, "error", `error adding book ${error}`);
+        response(res, transactionId, 400, "failed", error);
         client.close();
     }
     
@@ -81,51 +75,93 @@ const addNewBook = async(req, res, next) => {
 const getBookInfoById = async(req, res, next) => {
     // Get id from param
     let id = req.query.id;
+
+    const transactionId = getId();
+
+    log(transactionId, "info", `Request received to get book info with id : ${id}`);
+
+    const { client, db } = await initializeClient(transactionId, 'book-db');
+
+    log(transactionId, "info", `Checking for book with id : ${id} exists`);
+    
+    const collection = await db.collection('books').find({ id : id }).toArray();
+
     // Check if id exists in bookdb
-    if(bookDb[id] != undefined){
-        res.json(bookDb[id]);
+    if(collection.length > 0){
+        log(transactionId, "info", `book with id : ${id} available`);
+        response(res, transactionId, 200, "success", collection);
+        client.close();
+        return;
     }
+
+    log(transactionId, "info", `book with id : ${id} not available`);
     // If book not available sending 404 statusCode with error
-    res.status(404);
-    res.send({"status" : "Failed", "description" : "Book Not Available"});
+    response(res, transactionId, 404, "Failed", "Book not available");
+    client.close();
 }
 
 // Controller to update book info by id
-const updateBookById = (req, res, next) => {
+const updateBookById = async(req, res, next) => {
     // Get id from param
     let id = req.query.id;
+
+    const transactionId = getId();
+
     let requestBody = getRequestBody(req);
 
+    log(transactionId, "info", `Request received to update book with id : ${id} and request : ${JSON.stringify(requestBody)}`);
+
+    const { client, db } = await initializeClient(transactionId, 'book-db');
+
     if(requestBody['id'] != undefined){
-        res.send({ "status" : "failed", "description" : "Id cannot be updated" })
+        response(res, transactionId, 400, "failed", "id cannot be updated")
     }
+
+    log(transactionId, "info", `Checking for book with id : ${id} exists`);
+
+    const collection = await db.collection('books').find({ id }).toArray();
 
     // Check if id exists in bookdb
-    if(bookDb[id] != undefined){
-        bookDb[id] = {...bookDb[id], ...requestBody};
-        res.send({ "status" : "success", "description" : "book updated successfully !" });
+    if(collection.length > 0){
+        log(transactionId, "info", `Book with id : ${id} exists updating info`);;
+        let info = {...collection[0], ...requestBody};
+        await db.collection('books').updateOne({ id },{ $set : info });
+        response(res, transactionId, 200, "success", "book updated successfully !");
+        return;
     }
 
-    res.status(404);
-    res.send({ "status" : "failed", "description" : `Book not found with id : ${id}` });
+    response(res, transactionId, 400, "failed", `Book not found with id : ${id}`)
 }
 
 // Controller to delete book by Id
-const deleteBookById = (req, res, next) => {
+const deleteBookById = async(req, res, next) => {
     // Get id from param
     let id = req.query.id;
-    // Getting list of Ids
-    let bookIds = bookDb.map(book => book.id);
-    // If ids present
-    if(bookIds.includes(id)){
-        // Getting the index of id and deleting from bookDb
-        let index = bookDb.indexOf(id);
-        bookDb.splice(index,1);
-        res.send({ "status" : "success", "description" : "Book deleted successfuly" });
+
+    const transactionId = getId();
+
+    log(transactionId, 'Info', `Request received to delete book with id : ${id}`);
+    
+    const { client, db } = await initializeClient(transactionId, 'book-db');
+
+    try{
+        log(transactionId, 'Info', `Checking if book with id : ${id} exists`);
+
+        const collection = await db.collection('books').find({ id }).toArray();
+
+        if(collection.length > 0){
+            db.collection('books').deleteOne({ id });
+            response(res, transactionId, 200, 'success', 'Book deleted successfully');
+            return;
+        }
+
+        response(res, transactionId, 400, 'failed', 'Book not available');
+        client.close();
     }
-    // If book does not exists sending error message
-    res.status(404);
-    res.send({ "status" : "failed", "description" : "Book does not exists" });
+    catch (error) {
+        response(res, transactionId, 400, 'failed', error);
+        client.close();
+    }
 }
 
 // Method to get unique id for books
@@ -136,6 +172,21 @@ const getId = () => {
 // Method to get request body
 const getRequestBody = (req) => {
     return req.body;
+}
+
+// Method to initialize MongoClient
+const initializeClient = async(transactionId, dbName) => {
+    log(transactionId, "info", "initializing client");
+    const connection_string = "mongodb://localhost:27017/";
+    const client = new MongoClient(connection_string);
+    await client.connect();
+    return  ({ client, db : client.db(dbName) });
+}
+
+const response = (res, transactionId, statusCode, status, description) => {
+    log(transactionId, "info", `sending response with statusCode ${statusCode} with description ${JSON.stringify(description)}`)
+    res.status(statusCode);
+    res.send({ status, description })
 }
 
 exports.getBooksList = getBooksList;
