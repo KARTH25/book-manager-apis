@@ -2,30 +2,24 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const MongoClient = require('mongodb').MongoClient;
 const log = require('../utils/logger').logger;
+const Book  = require('../models/books');
 
 // Controller to get list of books 
 const getBooksList = async(req, res, next) => {
-    
+    // Get transactionId
     const transactionId = getId();
 
     log(transactionId, "info", "Request recieved to get all books");
 
-    // Initializing client and db
-    const { client, db } = await initializeClient(transactionId, 'book-db');
-
     // Fetching books collection
     try{
         log(transactionId, "info", "Getting books list");
-        const collection = await db.collection('books').find().toArray();
+        const collection = await Book.find().exec();
         response(res, transactionId, 200, "success", collection);
     }
     catch (err) {
-        log(transactionId, "error", "error in retriving books");
+        log(transactionId, "error", "Error in retriving books");
         response(res, transactionId, 400, "failed", err);
-    }
-    finally {
-       log(transactionId, "info", "closing connection");
-       setTimeout(() => { client.close() }, 1000);
     }
 }
 
@@ -36,14 +30,11 @@ const addNewBook = async(req, res, next) => {
     let requestBody = {...getRequestBody(req)}; 
 
     log(transactionId, "info", `request recieved to add new book with request body ${JSON.stringify(requestBody)}`);
-
-    // Initializing client
-    const { client, db } = await initializeClient(transactionId, 'book-db')
     
     try{
         log(transactionId, "info", "checking if book already exists");
         // Checking if book already exists in collection
-        const collection = await db.collection('books').find({ name : requestBody.name }).toArray();
+        const collection = await Book.find({ name : requestBody.name }).exec();
 
         // If book exists in collection sending error response
         if(collection.length > 0){
@@ -51,22 +42,24 @@ const addNewBook = async(req, res, next) => {
             response(res, transactionId, 400, "failed", "Book already exists");
             return;
         }
-
-        // If book not exists in collection generating uuid
-        const uuid = getId();
-        // Adding uuid to request body
-        requestBody['id'] = uuid;
-        // 
-        db.collection('books').insertOne(requestBody).then(result => {
-            log(transactionId, "info", `book added successfully with id : ${uuid}`);
-            response(res, transactionId, 200, "success", "book created successfully");
-            client.close();
-        });
+        
+        try{
+            requestBody['id'] = transactionId;
+            const newBook = new Book(requestBody);
+            await newBook.save();
+            response(res, transactionId, 200, "Success", "Book Added successfully !");
+            return;
+        }
+        catch (err) {
+            response(res, transactionId, 400, "Failed", `Error while creating book ${err}`);
+            return;
+        }
+        
     }
     catch (error) {
         log(transactionId, "error", `error adding book ${error}`);
         response(res, transactionId, 400, "failed", error);
-        client.close();
+        return;
     }
     
 } 
@@ -78,26 +71,20 @@ const getBookInfoById = async(req, res, next) => {
 
     const transactionId = getId();
 
-    log(transactionId, "info", `Request received to get book info with id : ${id}`);
-
-    const { client, db } = await initializeClient(transactionId, 'book-db');
-
-    log(transactionId, "info", `Checking for book with id : ${id} exists`);
+    log(transactionId, "info", `Request received to get book info with id : ${id} and checking for book exists`);
     
-    const collection = await db.collection('books').find({ id : id }).toArray();
+    const collection = await Book.find({ id }).exec();
 
     // Check if id exists in bookdb
     if(collection.length > 0){
         log(transactionId, "info", `book with id : ${id} available`);
         response(res, transactionId, 200, "success", collection);
-        client.close();
         return;
     }
 
     log(transactionId, "info", `book with id : ${id} not available`);
     // If book not available sending 404 statusCode with error
     response(res, transactionId, 404, "Failed", "Book not available");
-    client.close();
 }
 
 // Controller to update book info by id
@@ -109,28 +96,29 @@ const updateBookById = async(req, res, next) => {
 
     let requestBody = getRequestBody(req);
 
-    log(transactionId, "info", `Request received to update book with id : ${id} and request : ${JSON.stringify(requestBody)}`);
+    log(transactionId, "info", `Request received to update book with id : ${id} and request : ${JSON.stringify(requestBody)} and checking if book exists`);
 
-    const { client, db } = await initializeClient(transactionId, 'book-db');
+    try{
+        let collection = await Book.findOne({ id }).exec();
+        // Check if id exists in bookdb
+        if(collection != undefined){
+            log(transactionId, "info", `Book with id : ${id} exists updating info`);
+            if(requestBody[id] != undefined){
+                response(res, transactionId, 400, "failed", "Id cannot be updated");
+            }
 
-    if(requestBody['id'] != undefined){
-        response(res, transactionId, 400, "failed", "id cannot be updated")
+            collection['name'] = requestBody.name;
+            collection.save();
+            response(res, transactionId, 200, "failed", `Book updated successfully with id : ${id} !`);
+        }
+        else{
+            response(res, transactionId, 400, "failed", `Book does not exists with id : ${id} !`);
+            return;
+        }
     }
-
-    log(transactionId, "info", `Checking for book with id : ${id} exists`);
-
-    const collection = await db.collection('books').find({ id }).toArray();
-
-    // Check if id exists in bookdb
-    if(collection.length > 0){
-        log(transactionId, "info", `Book with id : ${id} exists updating info`);;
-        let info = {...collection[0], ...requestBody};
-        await db.collection('books').updateOne({ id },{ $set : info });
-        response(res, transactionId, 200, "success", "book updated successfully !");
-        return;
+    catch(err){
+        response(res, transactionId, 400, "Failed", `Error checking book ${JSON.stringify(err)}`);
     }
-
-    response(res, transactionId, 400, "failed", `Book not found with id : ${id}`)
 }
 
 // Controller to delete book by Id
@@ -142,8 +130,6 @@ const deleteBookById = async(req, res, next) => {
 
     log(transactionId, 'Info', `Request received to delete book with id : ${id}`);
     
-    const { client, db } = await initializeClient(transactionId, 'book-db');
-
     try{
         log(transactionId, 'Info', `Checking if book with id : ${id} exists`);
 
